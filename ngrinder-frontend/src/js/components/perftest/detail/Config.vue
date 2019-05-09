@@ -1,5 +1,5 @@
 <template>
-    <div v-if="dataLoadFinished" class="row config config-container">
+    <div v-if="dataLoadFinished" id="config-container" class="row config">
         <div class="span6" :data-hello="false">
             <fieldset>
                 <legend><span v-text="i18n('perfTest.config.basicConfiguration')"></span></legend>
@@ -11,7 +11,7 @@
                             <input-append name="agentCount" ref="agentCount"
                                           v-model="test.agentCount"
                                           @validationResult="$refs.agentCountControlGroup.handleError($event)"
-                                          :validationRules="{ required: true, agentCountValidation: true }"
+                                          :validationRules="agentCountValidationRules"
                                           errStyle="position: absolute; margin: 0;"
                                           appendPrefix="perfTest.config.max"
                                           :append="maxAgentCount"
@@ -65,7 +65,7 @@
 
                 <control-group labelMessageKey="perfTest.config.script" ref="scriptNameControlGroup">
                     <select2 v-model="test.scriptName" name="scriptName" ref="scriptName" customStyle="width: 275px;" :option="{placeholder: i18n('perfTest.config.scriptInput')}"
-                             :validationRules="{ scriptValidation: true }" @validationResult="$refs.scriptNameControlGroup.handleError($event)" errStyle="position: absolute;">
+                             :validationRules="{ required: true, scriptValidation: true }" @validationResult="$refs.scriptNameControlGroup.handleError($event)" errStyle="position: absolute;">
                         <option value=""></option>
                         <option v-for="script in scripts" :data-validate="script.validated" v-text="script.pathInShort" :value="script.path"></option>
                     </select2>
@@ -77,7 +77,7 @@
                 </control-group>
 
                 <control-group labelMessageKey="perfTest.config.scriptResources">
-                    <div class="div-resources" id="script_resources">
+                    <div class="div-resources">
                         <div class="resource" v-for="resource in resources" v-text="resource"></div>
                     </div>
                 </control-group>
@@ -117,7 +117,7 @@
                     <code>HH:MM:SS</code>
                     <input type="hidden" id="duration" name="duration" :value="durationSeconds * 1000"/>
                     <input type="hidden" id="duration_hour" name="durationHour" value="0"/>
-                    <vue-slider @callback="changeDurationSlider" v-model="durationSeconds" width="278" :max="28799" tooltip="none"></vue-slider>
+                    <vue-slider ref="durationSlider" @callback="changeDurationSlider" v-model="durationSeconds" width="278" :max="28799" tooltip="none"></vue-slider>
                 </control-group>
 
                 <control-group :radio="{radioValue: 'R', checked: test.threshold === 'R'}" v-model="test.threshold" labelMessageKey="perfTest.config.runCount" ref="runCountControlGroup" name="threshold" id="runCount">
@@ -181,7 +181,7 @@
                                                    dataPlacement="top"
                                                    v-model="test.param"
                                                    message="perfTest.config.param"
-                                                   customStyle="width: 125px">
+                                                   customStyle="width: 125px;">
                                     </input-popover>
                                 </control-group>
                             </div>
@@ -210,6 +210,12 @@
 
     @Component({
         name: 'config',
+        props: {
+            data: {
+                type: Object,
+                required: true,
+            },
+        },
         components: { ControlGroup, InputAppend, InputPrepend, InputPopover, VueSlider, HostModal, Select2, RampUp },
     })
     export default class Config extends Base {
@@ -218,6 +224,7 @@
         TEST_THRESHOLD_RUNCOUNT = 'R';
 
         test = {
+            testName: '',
             agentCount: 0,
             rampUpInitCount: 0,
             rampUpStep: 0,
@@ -265,32 +272,29 @@
             sec: 0,
         };
 
+        agentCountValidationRules = { required: true, agentCountValidation: true,};
         validationGroup = [];
 
         created() {
-            Promise.all([
-                this.$http.get(`/perftest/api/${this.$route.params.id}`),
-                this.$http.get('/perftest/api/script'),
-            ]).then(res => {
-                this.test = res[0].data.test;
-                this.regionAgentCountMap = res[0].data.regionAgentCountMap;
-                this.rampUpTypes = res[0].data.availRampUpType;
-                this.testConfig.maxRunCount = res[0].data.maxRunCount;
-                this.testConfig.maxRunHour = res[0].data.maxRunHour;
-                this.testConfig.maxVuserPerAgent = res[0].data.maxVuserPerAgent;
+            this.test = this.data.test;
+            this.regionAgentCountMap = this.data.regionAgentCountMap;
+            this.rampUpTypes = this.data.availRampUpType;
+            this.testConfig.maxRunCount = this.data.maxRunCount;
+            this.testConfig.maxRunHour = this.data.maxRunHour;
+            this.testConfig.maxVuserPerAgent = this.data.maxVuserPerAgent;
 
+            this.$http.get('/perftest/api/script').then(res => {
                 if (this.config.clustered) {
                     // TODO
                 } else {
                     this.changeMaxAgentCount("NONE");
                 }
-
-                this.setScripts(res[1].data, this.test.scriptName);
+                this.setScripts(res.data, this.test.scriptName);
                 this.setDuration();
                 this.setTargetHost(this.test.targetHosts);
                 this.getScriptResource();
                 this.finishDataLoad();
-            });
+            }).catch(error => console.error(error));
         }
 
         mounted() {
@@ -304,26 +308,32 @@
 
         setScripts(scripts, selectedScript) {
             if (!scripts.some(script => script.pathInShort === selectedScript)) {
-                scripts.push({pathInShort: `(deleted) ${selectedScript}`, path: selectedScript, validated: -1});
+                if (selectedScript) {
+                    scripts.push({pathInShort: `(deleted) ${selectedScript}`, path: selectedScript, validated: -1});
+                }
             }
             this.scripts = scripts;
         }
 
         getScriptResource() {
+            if (!this.test.scriptName) {
+                return;
+            }
+
             this.$http.get('/perftest/api/resource', {
                 params: {
                     scriptPath: this.test.scriptName,
                 },
             }).then(res => {
                 this.resources = res.data.resources;
-            }).catch((error) => console.log(error));
+            }).catch((error) => console.error(error));
         }
 
         finishDataLoad() {
             this.dataLoadFinished = true;
             this.$nextTick(() => {
                 $('[data-toggle="popover"]').popover('destroy');
-                $('[data-toggle="popover"]').popover({trigger: 'hover', container: '.config-container'});
+                $('[data-toggle="popover"]').popover({trigger: 'hover', container: '#config-container'});
                 this.$refs.rampUp.updateRampUpChart();
                 this.validationGroup = [this.$refs.agentCount, this.$refs.vuserPerAgent, this.$refs.ignoreSampleCount, this.$refs.param, this.$refs.runCount, this.$refs.scriptName];
             });
@@ -368,14 +378,14 @@
                 getMessage: this.i18n('perfTest.message.script'),
                 validate: () => {
                     if (this.$refs.scriptName) {
-                        return this.$refs.scriptName.getSelectedOptionValidate() !== "-1";
+                        return this.$refs.scriptName.getSelectedOptionValidate() !== '-1';
                     }
                     return true;
                 },
             });
         }
 
-        // duration format: "00:00:00"
+        // duration format: '00:00:00'
         setDuration() {
             let durationTokens = this.test.duration.split(':');
             this.duration.hour = parseInt(durationTokens[0]);
@@ -444,6 +454,9 @@
         }
 
         setTargetHost(targetHost) {
+            if (!targetHost) {
+                return;
+            }
             targetHost.split(',').forEach(host => this.targetHost.add(host));
             this.targetHostsChangeTracker += 1;
         }
@@ -489,7 +502,7 @@
 </style>
 
 <style lang="less" scoped>
-    .config-container {
+    #config-container {
         .detail-config-btn-container {
             span {
                 margin-right: 10px;

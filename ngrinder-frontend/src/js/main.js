@@ -16,6 +16,8 @@ import ScriptList from 'script/List.vue';
 import Copyright from 'common/Copyright.vue';
 import Navigator from 'common/navigator/Navigator.vue';
 
+import 'moment-duration-format';
+
 axios.interceptors.request.use(config => {
     if (typeof config.params === 'undefined') {
         config.params = {};
@@ -62,6 +64,7 @@ const routes = [
     {path: '/home', component: Home, alias: '/'},
     {path: '/login', component: Login, name: 'login'},
     {path: '/perftest', component: PerfTestList, name: 'perfTestList'},
+    {path: '/perftest/new', component: PerfTestDetail, name: 'createNewPerftest'},
     {path: '/perftest/:id', component: PerfTestDetail, name: 'perfTestDetail'},
     {path: '/script', component: ScriptList, name: 'scriptList', alias: ['/script/search', '/script/list/(.*)?']},
 ];

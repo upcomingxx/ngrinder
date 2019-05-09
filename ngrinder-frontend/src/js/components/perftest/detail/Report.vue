@@ -96,6 +96,12 @@
 
     @Component({
         name: 'report',
+        props: {
+            data: {
+                type: Object,
+                required: true,
+            }
+        },
         components: { ControlGroup }
     })
     export default class Report extends Base {
@@ -113,11 +119,23 @@
         logs = [];
 
         created() {
+            this.fetchReportData();
+        }
+
+        detailReport() {
+            // TODO
+        }
+
+        fetchReportData() {
+            if (!this.$route.params.id) {
+                return;
+            }
+
             this.$http.get(`/perftest/api/${this.$route.params.id}/basic_report?imgWidth=600`)
                 .then(res => {
                     this.logs = res.data.logs;
                     Object.assign(this.report.test, res.data.test);
-                    this.report.interval = res.data.charInterval;
+                    this.report.interval = res.data.chartInterval;
                     this.report.tps = res.data.tps;
                     this.dataLoadFinished = true;
                     this.$nextTick(() => {
@@ -126,10 +144,6 @@
                         new Chart('tps-chart', [this.report.tps], this.report.interval).plot();
                     });
                 }).catch((error) => console.log(error));
-        }
-
-        detailReport() {
-            // TODO
         }
 
         leaveComment() {

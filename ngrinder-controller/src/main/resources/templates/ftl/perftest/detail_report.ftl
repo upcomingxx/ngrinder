@@ -14,7 +14,7 @@
 		}
 
 		div.chart {
-			border: 1px solid #878988;
+			border: 1px solid #878988;\
 			height: 200px;
 			min-width: 615px;
 		}

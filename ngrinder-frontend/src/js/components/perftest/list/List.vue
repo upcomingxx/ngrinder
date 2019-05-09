@@ -6,7 +6,7 @@
             <code id="current_running_status" v-text="runningSummary"></code>
         </div>
 
-        <search-bar ref="searchBar" @filter-running="runQueryFilter" @filter-schduled="runQueryFilter"
+        <search-bar ref="searchBar" @filter-running="runQueryFilter" @filter-schduled="runQueryFilter" @create="createPerftest"
                     @search="getPerfTest" @change-tag="getPerfTest" @delete-selected-tests="deleteTests(selectedTests.toString())"></search-bar>
 
         <table class="table table-striped table-bordered ellipsis" id="test_table">
@@ -75,7 +75,7 @@
                             <input type="checkbox" v-model="selectedTests" class="perf_test checkbox" :value="test.id" :disabled="!test.deletable">
                         </td>
                         <td class="center">
-                            <div class="ball" data-html="true" data-toggle="popover" :title="test.status"
+                            <div ref="ball" class="ball" data-html="true" data-toggle="popover" :title="test.status"
                                  :data-content="`${test.progressMessage}<br><b>${test.lastProgressMessage}</b>`.replace(/\n/g, '<br>')">
                             <img class="status" :src="`/img/ball/${test.iconName}`">
                             </div>
@@ -148,7 +148,7 @@
 </template>
 
 <script>
-    import Component from 'vue-class-component';
+    import { Component, Watch } from 'vue-property-decorator';
     import vueHeadful from 'vue-headful';
     import Base from '../../Base.vue';
     import SearchBar from './Searchbar.vue';
@@ -169,14 +169,28 @@
         runningSummary = `0 ${this.i18n("perfTest.list.runningSummary")}`;
         totalElements = 0;
         tests = [];
+        testIds = [];
         selectAll = false;
         selectedTests = [];
         queryFilter = new Set();
         selectedTag = '';
 
+        updateStatusTimeoutId = 0;
+
         mounted() {
             this.getPerfTest();
-            this.updateStatuses();
+            this.updateStatusTimeoutId = setTimeout(this.updatePerftestStatus, 2000);
+        }
+
+        beforeDestroy() {
+            clearTimeout(this.updateStatusTimeoutId);
+        }
+
+        @Watch('tests')
+        watchTests() {
+            this.testIds = [];
+            this.tests.forEach(test => this.testIds.push(test.id));
+
         }
 
         changeSelectAll(event) {
@@ -221,6 +235,7 @@
                 },
             }).then(res => {
                 this.tests = res.data.tests;
+                console.log(this.tests);
                 this.totalElements = res.data.totalElements;
                 this.totalActivationPageCount = Math.ceil(this.totalElements / this.COUNT_OF_TEST_PER_PAGE);
                 this.$nextTick(() => this.initPopover());
@@ -271,6 +286,7 @@
                     }).then(res => {
                         if (res.data.success) {
                             this.getPerfTest();
+                            this.selectAll = false;
                             alert(this.i18n('perfTest.message.delete.success'));
                         }
                     }).catch(() => alert(this.i18n('perfTest.message.delete.error')));
@@ -278,16 +294,12 @@
             });
         }
 
-        stopTest(ids) {
+        stopTest(id) {
             bootbox.confirm(this.i18n('perfTest.message.stop.confirm'), this.i18n('common.button.cancel'), this.i18n('common.button.ok'), result => {
                 if (result) {
-                    this.$http.put('/perftest/api?action=stop', {
-                        params: {
-                            ids: ids,
-                        },
-                    }).then(res => {
+                    this.$http.put(`/perftest/api/${id}?action=stop`).then(res => {
                         if (res.data.success) {
-                            alert(this.i18n('perfTest.message.stop.success'));
+                            // alert(this.i18n('perfTest.message.stop.success'));
                         }
                     }).catch(() => alert(this.i18n('perfTest.message.stop.error')));
                 }
@@ -298,8 +310,27 @@
             this.$refs.smallChart[index].toggleDisplay();
         }
 
-        updateStatuses() {
-            // TODO update list state every 2 seconds.
+        createPerftest() {
+            this.$router.push('/perftest/new');
+        }
+
+        updatePerftestStatus() {
+            this.$http.get('/perftest/api/status', {
+                params: {
+                    ids: this.testIds.join(','),
+                },
+            }).then(res => {
+                console.log(res);
+                const status = res.data.status.reverse();
+                this.testIds.forEach((id, index) => {
+                    this.tests[index].iconName = status[index].icon;
+                    this.tests[index].reportable = status[index].reportable;
+                    this.tests[index].deletable = status[index].deletable;
+                    this.tests[index].stoppable = status[index].stoppable;
+                    this.tests[index].status = status[index].status_id;
+                });
+                this.updateStatusTimeoutId = setTimeout(this.updatePerftestStatus, 2000);
+            }).catch(error => console.error(error));
         }
     }
 </script>

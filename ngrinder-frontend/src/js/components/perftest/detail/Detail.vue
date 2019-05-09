@@ -1,7 +1,7 @@
 <template>
     <div v-if="dataLoadFinished" class="perftest-detail-container">
         <div class="container">
-            <form id="test_config_form" name="test_config_form" action="/perftest/new" ref="configForm">
+            <form ref="configForm">
                 <div class="well">
                     <input type="hidden" name="id" :value="test.id">
                     <div class="form-horizontal info">
@@ -9,8 +9,13 @@
                             <div class="control-group">
                                 <div class="row">
                                     <div class="span4-5" data-step="1" :data-intro="i18n('intro.detail.testName')">
-                                        <control-group name="testName" labelMessageKey="perfTest.config.testName">
-                                            <input class="required span3 left-float" maxlength="80" size="30" type="text" id="test_name" name="testName" :value="test.testName"/>
+                                        <control-group ref="testNameControlGroup" labelMessageKey="perfTest.config.testName">
+                                            <input class="required span3 left-float" name="testName"
+                                                   maxlength="80" size="30" type="text"
+                                                   @keyup="checkTestNameValidation"
+                                                   v-validate="{ required: true }"
+                                                   v-model="test.testName"/>
+                                            <div v-show="errors.has('testName')" v-text="errors.first('testName')" class="validation-message"></div>
                                         </control-group>
                                     </div>
                                     <div class="span3-4 tag-container" data-step="2" :data-intro="i18n('intro.detail.tags')">
@@ -22,12 +27,12 @@
                                     </div>
                                     <div class="span1 status-image-container">
                                         <img id="test_status_img" class="ball"
-                                             :src="`/img/ball/${test.iconName}`"
-                                             data-toggle="popover"
                                              data-html="true"
-                                             :data-content="`${test.progressMessage}<br><b>${test.lastProgressMessage}</b>`.replace(/\n/g, '<br>')"
+                                             data-toggle="popover"
+                                             data-placement="bottom"
+                                             :data-content="perftestStatus.message"
                                              :title="i18n(test.springMessageKey)"
-                                             data-placement="bottom"/>
+                                             :src="perftestStatus.iconPath"/>
                                     </div>
                                     <div class="span2-3 start-button-container" data-step="3" :data-intro="i18n('intro.detail.startbutton')">
                                         <div class="control-group">
@@ -59,7 +64,7 @@
                             <a v-show="tab.display.config" href="#test-config-section" data-toggle="tab" ref="configTab" v-text="i18n('perfTest.config.testConfiguration')"></a>
                         </li>
                         <li>
-                            <a v-show="tab.display.running" href="#running-section" data-toggle="tab" v-text="i18n('perfTest.running.title')"></a>
+                            <a v-show="tab.display.running" href="#running-section" data-toggle="tab" ref="runningTab" v-text="i18n('perfTest.running.title')"></a>
                         </li>
                         <li>
                             <a v-show="tab.display.report" href="#report-section" data-toggle="tab" ref="reportTab" v-text="i18n('perfTest.report.tab')"></a>
@@ -67,21 +72,22 @@
                     </ul>
                     <div class="tab-content">
                         <div class="tab-pane" id="test-config-section">
-                            <config ref="config"></config>
+                            <config ref="config" :data="data"></config>
                         </div>
                         <div class="tab-pane" id="running-section">
-                            <running></running>
+                            <running ref="running" :test="test"></running>
                         </div>
                         <div class="tab-pane" id="report-section">
-                            <report></report>
+                            <report ref="report"></report>
                         </div>
                     </div>
                     <input v-if="scheduledTime" type="hidden" name="scheduledTime" :value="scheduledTime">
-                    <input type="hidden" name="status" value="SAVED">
+                    <input type="hidden" name="status" :value="test.status">
                 </div>
             </form>
             <intro-button></intro-button>
         </div>
+        <schedule-modal ref="scheduleModal" :id="'schedule-modal'" @runNow="runNow" :timezoneOffset="timezoneOffset"></schedule-modal>
     </div>
 </template>
 <script>
@@ -93,16 +99,37 @@
     import ControlGroup from '../../common/ControlGroup.vue';
     import IntroButton from '../../common/IntroButton.vue';
     import Select2 from '../../common/Select2.vue';
+    import ScheduleModal from '../modal/ScheduleModal.vue';
 
     @Component({
         name: 'perfTestDetail',
-        components: { ControlGroup, Config, Report, Running, IntroButton, Select2 },
+        components: { ControlGroup, Config, Report, Running, IntroButton, Select2, ScheduleModal },
     })
     export default class PerfTestDetail extends Base {
-        test = {};
+        data = {};
+        test = {
+            id: '',
+            status: '',
+            iconName: '',
+            testName: '',
+            progressMessage: '',
+            description: '',
+            createdUserId: '',
+            lastProgressMessage: '',
+            springMessageKey: '',
+        };
+
+        perftestStatus = {
+            message: '',
+            iconPath: '',
+        };
+
         selectedTag = '';
         dataLoadFinished = false;
         scheduledTime = 0;
+        timezoneOffset = 0;
+
+        currentRefreshStatusTimeoutId = 0;
 
         tab = {
             display: {
@@ -112,38 +139,119 @@
             },
         };
 
-        created() {
-            this.$http.get(`/perftest/api/${this.$route.params.id}`).then(res => {
-                this.test = res.data.test;
-                this.selectedTag = this.test.tagString;
-                this.updateTabDisplay();
-                this.dataLoadFinished = true;
-                this.$nextTick(() => {
-                    $(this.$refs.configTab).on('shown.bs.tab', () => {
-                        this.$EventBus.$emit(this.$Event.UPDATE_RAMPUP_CHART);
-                    });
+        checkTestNameValidation() {
+            this.$validator.validate('testName').then(result => {
+                this.$refs.testNameControlGroup.hasError = !result;
+            }).catch(() => {
+                this.$refs.testNameControlGroup.hasError = false;
+            });
+        }
 
-                    if (this.tab.display.report) {
-                        this.$refs.reportTab.click();
-                        return;
+        created() {
+            const apiPath = this.$route.params.id ? `/perftest/api/${this.$route.params.id}` : '/perftest/api/create';
+            this.$http.get(apiPath).then(res => {
+                Object.assign(this.data, res.data);
+                Object.assign(this.test, res.data.test);
+                this.timezoneOffset = res.data.timezone_offset;
+                this.selectedTag = this.test.tagString;
+                this.perftestStatus.message = `${this.test.progressMessage}<br><b>${this.test.lastProgressMessage}</b>`.replace(/\n/g, '<br>');
+                this.perftestStatus.iconPath = `/img/ball/${this.test.iconName}`;
+                this.dataLoadFinished = true;
+                this.updateTabDisplay();
+                this.$nextTick(() => {
+                    if (this.test.category === 'TESTING') {
+                        this.$refs.running.startSamplingInterval();
                     }
-                    this.$refs.configTab.click();
+                    this.currentRefreshStatusTimeoutId = this.refreshPerftestStatus();
+                    this.setTabEvent();
                 });
+            }).catch((error) => console.err(error));
+        }
+
+        beforeDestroy() {
+            window.clearTimeout(this.currentRefreshStatusTimeoutId);
+            window.clearInterval(this.$refs.running.samplingIntervalId);
+        }
+
+        setTabEvent() {
+            $(this.$refs.configTab).on('shown.bs.tab', () => {
+                this.$refs.config.$refs.rampUp.updateRampUpChart();
+                this.$refs.config.$refs.durationSlider.refresh();
+            });
+
+            $(this.$refs.runningTab).on('shown.bs.tab', () => {
+                console.log('start sampling interval');
+                this.$refs.running.startSamplingInterval();
+            });
+
+            $(this.$refs.runningTab).on('hide.bs.tab', () => {
+                console.log('clear sampling interval');
+                window.clearInterval(this.$refs.running.samplingIntervalId);
+            });
+
+            $(this.$refs.reportTab).on('shown.bs.tab', () => this.$refs.report.fetchReportData());
+        }
+
+        refreshPerftestStatus() {
+            if (!this.test.id || !this.isUpdatableStatus()) {
+                return;
+            }
+
+            this.$http.get(`/perftest/api/${this.test.id}/status`).then(res => {
+                const status = res.data.status[0];
+                if (this.test.status !== status.status_id) {
+                    this.test.status = status.status_id;
+                    this.updateStatus(status.status_id, status.status_type, status.name, status.icon, status.deletable, status.stoppable, status.message);
+                }
+                console.log(`${this.test.category} ${status.status_type}`);
+                if (this.test.category !== status.status_type) {
+                    this.test.category = status.status_type;
+                    this.updateTabDisplay();
+                }
+                this.currentRefreshStatusTimeoutId = setTimeout(this.refreshPerftestStatus, 3000);
             }).catch((error) => console.log(error));
+        }
+
+        updateStatus(id, statusType, name, icon, deletable, stoppable, message) {
+            if (!this.isUpdatableStatus()) {
+                window.clearInterval(this.$refs.running.samplingIntervalId);
+            }
+
+            if (this.perftestStatus.message !== message) {
+                this.perftestStatus.message = message;
+            }
+
+            if (this.perftestStatus.iconPath !== `/img/ball/${icon}`) {
+                this.perftestStatus.iconPath = `/img/ball/${icon}`;
+            }
         }
 
         updateTabDisplay() {
             this.tab.display.config = true;
-            if (this.test.category === "TESTING") {
+            if (this.test.category === 'TESTING') {
                 this.tab.display.running = true;
                 this.tab.display.report = false;
+                this.$nextTick(() => {
+                    this.$refs.runningTab.click();
+                });
                 return;
             }
 
-            if (this.test.category === "FINISHED" || this.test.category === "STOP" || this.test.category === "ERROR") {
+            if (this.test.category === 'FINISHED' || this.test.category === 'STOP' || this.test.category === 'ERROR' || this.test.category === 'CANCELED') {
                 this.tab.display.report = true;
                 this.tab.display.running = false;
+                this.$nextTick(() => {
+                    this.$refs.reportTab.click();
+                });
+                return;
             }
+            this.$nextTick(() => {
+                this.$refs.configTab.click();
+            });
+        }
+
+        isUpdatableStatus() {
+            return !(this.test.status === 'FINISHED' || this.test.status === 'CANCELED' || this.test.status === 'STOP_BY_ERROR')
         }
 
         initSelection(element, callback) {
@@ -153,7 +261,7 @@
                     data.push({id: tag, text: tag});
                 }
             });
-            element.val("");
+            element.val('');
             callback(data);
         }
 
@@ -173,26 +281,64 @@
         }
 
         clonePerftest() {
-            this.$refs.configTab.click();
+            this.$delete(this.$refs.config.agentCountValidationRules, 'min_value');
+            let agentCountField = this.$refs.config.$refs.agentCount.$validator.fields.find({name: 'agentCount'});
+            agentCountField.update({rules: this.$refs.config.agentCountValidationRules});
 
-            let validationPromise = [];
-            this.$refs.config.validationGroup.forEach(validation => validationPromise.push(validation.getCheckValidationPromise()));
-
-            Promise.all(validationPromise).then(() => {
-                if (!this.$refs.config.hasValidationError()) {
-                    this.$http.post('/perftest/api/new', $(this.$refs.configForm).serialize()).then(res => {
-                        if (res.data === 'list') {
-                            this.$router.push('/perftest');
-                        } else {
-                            this.$router.push(`/perftest/${res.data}`);
-                        }
-                    }).catch((error) => console.log(error));
+            Promise.all(this.getValidationPromise()).then(() => {
+                if (!this.$refs.config.hasValidationError() && !this.errors.any()) {
+                    this.test.status = 'SAVED';
+                    this.$nextTick(() => {
+                        this.$http.post('/perftest/api/new', $(this.$refs.configForm).serialize()).then(res => {
+                            if (res.data === 'list') {
+                                this.$router.push('/perftest');
+                            } else {
+                                this.$router.push(`/perftest/${res.data}`);
+                            }
+                        }).catch((error) => console.log(error));
+                    });
+                } else {
+                    this.$refs.configTab.click();
                 }
             });
         }
 
         saveAndStart() {
-            // TODO
+            this.$set(this.$refs.config.agentCountValidationRules, 'min_value', 1);
+            let agentCountField = this.$refs.config.$refs.agentCount.$validator.fields.find({name: 'agentCount'});
+            agentCountField.update({rules: this.$refs.config.agentCountValidationRules});
+
+            Promise.all(this.getValidationPromise()).then(() => {
+                if (!this.$refs.config.hasValidationError() && !this.errors.any()) {
+                    this.$refs.scheduleModal.show();
+                } else {
+                    this.$refs.configTab.click();
+                }
+            });
+        }
+
+        getValidationPromise() {
+            let validationPromise = [new Promise(resolve => {this.$validator.validate('testName').then(result => {
+                this.$refs.testNameControlGroup.hasError = !result;
+                resolve();
+            }).catch(() => {
+                this.$refs.testNameControlGroup.hasError = false;
+                resolve();
+            })})];
+            this.$refs.config.validationGroup.forEach(validation => validationPromise.push(validation.getCheckValidationPromise()));
+            return validationPromise;
+        }
+
+        runNow() {
+            this.$refs.scheduleModal.hide();
+            this.test.status = 'READY';
+            this.scheduledTime = null;
+
+            this.$nextTick(() => {
+                this.$http.post('/perftest/api/new', $(this.$refs.configForm).serialize()).then(res => {
+                    this.$router.push(`/perftest/${res.data}`);
+                }).catch((error) => console.log(error));
+            });
         }
 
         get saveScheduleBtnTitle() {

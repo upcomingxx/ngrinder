@@ -99,4 +99,4 @@ test {
 
 tasks.bootWar.dependsOn convert_cr_lf
 
-tasks.processResources.dependsOn tasks.getByPath(":ngrinder-frontend:webpack")
+/*tasks.processResources.dependsOn tasks.getByPath(":ngrinder-frontend:webpack")*/
